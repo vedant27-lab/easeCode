@@ -49,5 +49,73 @@ def get_page_fields(driver):
         return fields;
     """)
 
-def ask_gemini(commands, fields):
-    prompt = f""""""
+def ask_gemini(command, fields):
+    prompt = f"""
+You control a browser. The user said: "{command}"
+
+Fields on the current page:
+{json.dumps(fields, indent=2)}
+
+Reply ONLY with a JSON array of actions. No explanation. No markdown. No code blocks.
+Each action must be one of:
+  {{"action": "fill", "selector": "id or name value", "by": "id|name|placeholder", "value": "..."}}
+  {{"action": "click", "selector": "id or name value", "by": "id|name"}}
+  {{"action": "wait", "seconds": 2}}
+
+Example:
+[
+  {{"action": "fill", "by": "name", "selector": "username", "value": "tomsmith"}},
+  {{"action": "fill", "by": "name", "selector": "password", "value": "SuperSecretPassword!"}},
+  {{"action": "click", "by": "css", "selector": "button[type=submit]"}}
+]
+"""
+    response = model.generate_content(prompt)
+    raw = response.text.strip()
+    if "```" in raw:
+        raw = raw.split("```")[1]
+        if raw.startswith("json"):
+            raw = raw[4:]
+    
+    return json.loads(raw.strip())
+def run_actions(driver, actions):
+    for step in actions:
+        act = step["action"]
+        print(f" doing: {step}")
+        if act == "fill":
+            by = By.ID if step["by"] == "id" else By.NAME if step["by"] == "name" else By.CSS_SELECTOR
+            selector = step["selector"] if step["by"] != "placeholder" else f'[placeholder = "{step["selector"]}"]'
+            el = driver.find_element(by, selector)
+            el.clear()
+            el.send_keys(step["value"])
+        elif act == "click":
+            if step["by"] == "css":
+                driver.find_element(By.CSS_SELECTOR, step["selector"]).click()
+            else:
+                by = By.ID if step["by"] == "id" else By.NAME
+                driver.find_element(by, step["selector"]).click()
+
+        elif act == "wait":
+            time.sleep(step.get("seconds", 2))
+
+        time.sleep(0.5)
+
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+
+url = input("Enter URL: ")
+
+driver.get(url)
+time.sleep(2)
+
+command = input("What do you want to do? ")
+fields = get_page_fields(driver)
+actions = ask_gemini(command, fields)
+
+print("\nGemini's plan:", json.dumps(actions, indent=2))
+run_actions(driver, actions)
+input("\nDone. Please enter to close.")
+
+response = model.generate_content(command)
+print(response.text)
+
+driver.quit()
+
